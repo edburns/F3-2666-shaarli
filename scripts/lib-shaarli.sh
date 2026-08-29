@@ -115,7 +115,8 @@ provision_instance_base() {
   [[ "$(az group exists --name "$RESOURCE_GROUP")" == "false" ]] ||
     die "Shaarli instance '$instance_name' already exists ($RESOURCE_GROUP already exists)"
 
-  suffix="$(random_hex 16)"
+  # Container App names must be shorter than 32 characters.
+  suffix="$(random_hex 11)"
   APP_NAME="shaarli-$suffix"
   ENVIRONMENT_NAME="cae-$suffix"
   STORAGE_ACCOUNT="stsh$(random_hex 10)"

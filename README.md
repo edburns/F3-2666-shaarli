@@ -76,7 +76,7 @@ the Entra app registration.
 ## Naming, cost, and maintenance
 
 An instance named `personal` is managed as resource group
-`REDACTED_RESOURCE_GROUP`; the public app hostname contains a random 128-bit suffix.
+`REDACTED_RESOURCE_GROUP`; the public app hostname contains a random 88-bit suffix.
 Instance names must be 1-30 lowercase letters, numbers, or hyphens.
 
 The Consumption plan's scale-to-zero behavior and smallest supported resource
