@@ -274,6 +274,21 @@ EOF
     -o tsv)"
   [[ "$configured_principal_id" == "$principal_id" ]] ||
     die "Microsoft Entra principal allow-list verification failed; public ingress was not enabled"
+
+  local active_revision
+  active_revision="$(az containerapp revision list \
+    --name "$APP_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query '[?properties.active].name | [0]' \
+    -o tsv)"
+  [[ -n "$active_revision" ]] ||
+    die "could not find the active Container App revision to apply authentication settings"
+  log "Restarting the private revision to apply its authentication secret"
+  az containerapp revision restart \
+    --name "$APP_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --revision "$active_revision" \
+    --output none
 }
 
 publish_instance() {
