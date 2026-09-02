@@ -9,7 +9,24 @@ readonly SHAARLI_DEFAULT_IMAGE="ghcr.io/shaarli/shaarli:release"
 readonly SHAARLI_DEFAULT_LOCATION="eastus"
 readonly SHAARLI_DATA_SHARE="shaarli-data"
 readonly SHAARLI_ENV_STORAGE="shaarli-data"
-readonly SHAARLI_SCHEMA_VERSION="1"
+readonly SHAARLI_SCHEMA_VERSION="2"
+
+# Container Apps bills allocated resources by the second while a replica is
+# running. With minReplicas 0 an idle instance costs nothing regardless of these
+# values, so allocating more only costs during the seconds a request is actually
+# being served -- and more CPU shortens the cold start that dominates those
+# seconds. Must be one of the CPU/memory pairs Container Apps accepts:
+# 0.25/0.5Gi, 0.5/1.0Gi, 0.75/1.5Gi, 1.0/2.0Gi, and so on.
+readonly SHAARLI_DEFAULT_CPU="0.5"
+readonly SHAARLI_DEFAULT_MEMORY="1.0Gi"
+
+# Thumbnail generation fetches and resizes a remote image per bookmark, lazily
+# on first display. On a small container with a large collection that is the
+# most expensive thing Shaarli can be asked to do, and the resulting cache lives
+# in the container's ephemeral filesystem, so it is discarded on every
+# scale-to-zero cycle. Seed it off; "common" (known media sites only) or "all"
+# can be set later from Tools -> Configure.
+readonly SHAARLI_THUMBNAIL_MODE="none"
 
 log() {
   printf '==> %s\n' "$*" >&2
@@ -47,6 +64,73 @@ resource_group_for() {
 random_hex() {
   local byte_count="${1:-8}"
   od -An -N "$byte_count" -tx1 /dev/urandom | tr -d '[:space:]'
+}
+
+# Compute the public HTTPS URL an app will have once external ingress is
+# enabled. The Container Apps environment's default domain is stable and known
+# as soon as the environment exists, so this can be resolved before the app is
+# created -- and, critically, before ingress is flipped from internal to
+# external. Deriving it from properties.configuration.ingress.fqdn at create
+# time would yield the *.internal.* hostname instead.
+shaarli_root_url_for() {
+  local app_name="$1"
+  local environment_name="$2"
+  local resource_group="$3"
+  local default_domain
+
+  default_domain="$(az containerapp env show \
+    --name "$environment_name" \
+    --resource-group "$resource_group" \
+    --query properties.defaultDomain \
+    -o tsv)"
+  [[ -n "$default_domain" ]] ||
+    die "could not determine the Container Apps environment default domain"
+
+  printf 'https://%s.%s/\n' "$app_name" "$default_domain"
+}
+
+# Shaarli derives its own base URL from $_SERVER at request time. Behind the
+# Container Apps ingress and Easy Auth sidecar that discovery fails, producing
+# an empty host and breaking every generated absolute URL (bookmarklets, feed
+# links, permalinks, QR codes). general.root_url overrides the discovery.
+#
+# The data share mounts at /var/www/shaarli/data, so writing config.json.php to
+# the share root pre-seeds the config before the container's first boot. The
+# install wizard still runs -- it triggers on a missing credentials.login, not a
+# missing file -- and merges its output into whatever is already there.
+#
+# Any other setting that should differ from Shaarli's defaults on a fresh
+# instance belongs here too, so a new instance boots correct rather than needing
+# a manual visit to the settings page.
+seed_shaarli_config() {
+  local storage_account="$1"
+  local storage_key="$2"
+  local root_url="$3"
+  local thumbnail_mode="$4"
+  local seed_file
+
+  seed_file="$(mktemp "${TMPDIR:-/tmp}/shaarli-config.XXXXXX")"
+  cat >"$seed_file" <<EOF
+<?php /*
+{
+    "general": {
+        "root_url": "$root_url"
+    },
+    "thumbnails": {
+        "mode": "$thumbnail_mode"
+    }
+}
+*/ ?>
+EOF
+
+  az storage file upload \
+    --account-name "$storage_account" \
+    --account-key "$storage_key" \
+    --share-name "$SHAARLI_DATA_SHARE" \
+    --source "$seed_file" \
+    --path config.json.php \
+    --output none
+  rm -f "$seed_file"
 }
 
 ensure_azure_ready() {
@@ -178,6 +262,12 @@ provision_instance_base() {
     --query id \
     -o tsv)"
 
+  SHAARLI_ROOT_URL="$(shaarli_root_url_for \
+    "$APP_NAME" "$ENVIRONMENT_NAME" "$RESOURCE_GROUP")"
+  log "Seeding Shaarli configuration with root_url $SHAARLI_ROOT_URL"
+  seed_shaarli_config \
+    "$STORAGE_ACCOUNT" "$storage_key" "$SHAARLI_ROOT_URL" "$SHAARLI_THUMBNAIL_MODE"
+
   local app_yaml
   app_yaml="$(mktemp "${TMPDIR:-/tmp}/shaarli-app.XXXXXX")"
   cat >"$app_yaml" <<EOF
@@ -195,8 +285,8 @@ properties:
       - name: shaarli
         image: $image
         resources:
-          cpu: 0.25
-          memory: 0.5Gi
+          cpu: $SHAARLI_DEFAULT_CPU
+          memory: $SHAARLI_DEFAULT_MEMORY
         volumeMounts:
           - volumeName: shaarli-data
             mountPath: /var/www/shaarli/data
@@ -242,6 +332,21 @@ EOF
     --query password \
     -o tsv)"
   tenant_id="$(az account show --query tenantId -o tsv)"
+
+  # Easy Auth stops working when this secret expires, with a failure that does
+  # not obviously point at a credential. Record the date so it is queryable
+  # across instances and rotate-auth-secret.sh has a baseline to report against.
+  local secret_expiry
+  secret_expiry="$(az ad app credential list \
+    --id "$AUTH_APP_ID" \
+    --query 'max_by(@, &endDateTime).endDateTime' \
+    -o tsv 2>/dev/null | cut -c1-10 || true)"
+  if [[ -n "$secret_expiry" ]]; then
+    az group update \
+      --name "$RESOURCE_GROUP" \
+      --set "tags.shaarliAuthSecretExpiry=$secret_expiry" \
+      --output none
+  fi
 
   log "Restricting the app to Microsoft Entra principal $principal_id"
   az containerapp auth microsoft update \
@@ -309,6 +414,13 @@ publish_instance() {
     --resource-group "$RESOURCE_GROUP" \
     --query properties.configuration.ingress.fqdn \
     -o tsv)"
+
+  # The seeded root_url was predicted from the environment's default domain.
+  # If the assigned FQDN differs, every absolute URL Shaarli generates will be
+  # wrong, so fail loudly rather than shipping a subtly broken instance.
+  if [[ -n "${SHAARLI_ROOT_URL:-}" && "$SHAARLI_ROOT_URL" != "$APP_URL/" ]]; then
+    die "seeded root_url ($SHAARLI_ROOT_URL) does not match the assigned ingress FQDN ($APP_URL/); run scripts/set-root-url.sh $instance_name to repair"
+  fi
 
   log "Registering the public authentication callback"
   az ad app update \
