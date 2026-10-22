@@ -31,6 +31,7 @@ wp-config.php
 
 # Log files
 *.log
+*job-logs*
 
 # htaccess
 /.htaccess
@@ -46,3 +47,11 @@ wp-config.php
 # Note: If you wish to whitelist themes,
 # uncomment the next line
 #/wp-content/themes
+
+# Local credentials, private bookmark exports, and editor recovery files.
+/.env.local
+/shaarli_import.html
+/diigo_bookmarks.html
+**/#*#
+**/.#*
+__pycache__/

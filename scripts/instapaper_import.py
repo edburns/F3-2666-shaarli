@@ -14,7 +14,10 @@ Examples:
     # Resume a previous run:
     python3 instapaper_import.py bookmarks.html --resume MTAw
 
-    # Pass credentials via args (otherwise prompted):
+    # Load your private environment before running (password is prompted):
+    source .env.local
+
+    # Optional command-line overrides:
     python3 instapaper_import.py bookmarks.html \\
         --consumer-key KEY --consumer-secret SECRET
 """
@@ -36,7 +39,6 @@ import uuid
 
 # --- defaults ---------------------------------------------------------------
 DEFAULT_CHUNK_SIZE = 100
-DEFAULT_USERNAME = os.environ.get("INSTAPAPER_USERNAME", "")
 DELAY_BETWEEN_ADDS = 1.0
 
 XAUTH_URL = "https://www.instapaper.com/api/1/oauth/access_token"
@@ -142,17 +144,15 @@ def oauth_request(method, url, body_params, consumer_key, consumer_secret,
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
 
     vprint(f"\n> {method} {url}")
-    vprint(f"> Authorization: {auth_header[:80]}...")
+    vprint("> Authorization: REDACTED")
     vprint(f"> Content-Type: application/x-www-form-urlencoded")
-    vprint(f"> Body: {urllib.parse.urlencode(body_params)[:200]}")
+    vprint("> Body: REDACTED")
 
     try:
         resp = urllib.request.urlopen(req)
         body = resp.read().decode(errors="replace")
         vprint(f"< HTTP {resp.status} {resp.reason}")
-        for h, v in resp.getheaders():
-            vprint(f"< {h}: {v}")
-        vprint(f"< Body: {body[:1000]}")
+        vprint("< Headers and body: REDACTED")
         return (resp.status, dict(resp.getheaders()), body)
     except urllib.error.HTTPError as e:
         err_body = ""
@@ -161,9 +161,7 @@ def oauth_request(method, url, body_params, consumer_key, consumer_secret,
         except Exception:
             pass
         vprint(f"< HTTP {e.code} {e.reason}")
-        for h, v in e.headers.items():
-            vprint(f"< {h}: {v}")
-        vprint(f"< Body: {err_body[:1000]}")
+        vprint("< Headers and body: REDACTED")
         return (e.code, dict(e.headers.items()), err_body)
     except urllib.error.URLError as e:
         vprint(f"< URLError: {e.reason}")
@@ -183,13 +181,13 @@ def xauth_login(consumer_key, consumer_secret, username, password):
         "POST", XAUTH_URL, body, consumer_key, consumer_secret
     )
     if status != 200:
-        print(f"ERROR: xAuth failed (HTTP {status}): {body_text}")
+        print(f"ERROR: xAuth failed (HTTP {status}); response body withheld.")
         sys.exit(1)
     tokens = dict(urllib.parse.parse_qsl(body_text))
     oauth_token = tokens.get("oauth_token", "")
     oauth_secret = tokens.get("oauth_token_secret", "")
     if not oauth_token or not oauth_secret:
-        print(f"ERROR: xAuth response missing tokens: {body_text}")
+        print("ERROR: xAuth response missing tokens; response body withheld.")
         sys.exit(1)
     return oauth_token, oauth_secret
 
@@ -263,21 +261,35 @@ def main():
                         help="Resume hash from a previous run")
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
                         help=f"Bookmarks per chunk (default: {DEFAULT_CHUNK_SIZE})")
-    parser.add_argument("--username", default=DEFAULT_USERNAME,
-                        help=f"Instapaper email (default: {DEFAULT_USERNAME})")
+    parser.add_argument("--username", default=os.environ.get("INSTAPAPER_USERNAME"),
+                        help="Instapaper email (default: INSTAPAPER_USERNAME)")
     parser.add_argument("--consumer-key",
-                        help="OAuth consumer key (prompted if omitted)")
+                        default=os.environ.get("INSTAPAPER_CONSUMER_KEY"),
+                        help="OAuth consumer key (default: INSTAPAPER_CONSUMER_KEY)")
     parser.add_argument("--consumer-secret",
-                        help="OAuth consumer secret (prompted if omitted)")
+                        default=os.environ.get("INSTAPAPER_CONSUMER_SECRET"),
+                        help="OAuth consumer secret (default: INSTAPAPER_CONSUMER_SECRET)")
     parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Show detailed HTTP request/response info")
+                        help="Show HTTP status details (credentials and bodies withheld)")
     args = parser.parse_args()
     VERBOSE = args.verbose
 
     # --- credentials --------------------------------------------------------
-    consumer_key = args.consumer_key or input("Consumer key: ").strip()
-    consumer_secret = args.consumer_secret or getpass.getpass("Consumer secret: ")
+    for name, value in (
+        ("INSTAPAPER_USERNAME", args.username),
+        ("INSTAPAPER_CONSUMER_KEY", args.consumer_key),
+        ("INSTAPAPER_CONSUMER_SECRET", args.consumer_secret),
+    ):
+        if not value or not value.strip() or "REDACTED" in value.upper():
+            parser.error(
+                f"{name} is missing or redacted; author and source .env.local "
+                "or provide the corresponding command-line option"
+            )
+    consumer_key = args.consumer_key
+    consumer_secret = args.consumer_secret
     password = getpass.getpass(f"Instapaper password for {args.username}: ")
+    if not password or "REDACTED" in password.upper():
+        parser.error("Instapaper password is missing or redacted")
 
     # --- parse bookmarks ----------------------------------------------------
     bookmarks = parse_bookmarks(args.html_file)

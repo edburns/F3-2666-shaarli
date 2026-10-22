@@ -26,6 +26,37 @@ credentials, links, and plugins live in the data share.
 The scripts use the signed-in Azure CLI user's Entra object ID by default. Pass
 `--principal-id OBJECT_ID` to grant a different user access.
 
+### Private environment for the Instapaper importer
+
+The Azure management scripts discover their configuration through Azure CLI;
+they do not need hardcoded personal account values or an environment file.
+For `scripts/instapaper_import.py`, create your own ignored configuration file:
+
+```bash
+cp .env.example .env.local
+chmod 600 .env.local
+# Edit .env.local with your own Instapaper username and consumer credentials.
+source .env.local
+python3 scripts/instapaper_import.py /path/to/private-bookmarks.html
+```
+
+The file must be authored and explicitly sourced before running the importer;
+it is not loaded automatically. Empty or redacted values fail before a network
+request. Existing command-line credential options override the environment.
+The password is prompted securely and is not stored in this file.
+
+Keep bookmark exports and operational transcripts private. Even with HTTP
+credential/body logging suppressed, import progress includes bookmark URLs and
+tags. Never commit raw logs, exported bookmarks, or `.env.local`. Redacting Git
+history does not revoke previously exposed credentials: rotate the Instapaper
+password and consumer credentials, and revoke exposed OAuth access tokens
+before publishing. Remote caches and other clones require separate cleanup.
+
+The raw files under `prompts/` have been replaced with redaction notices
+throughout Git history. Deployment identifiers in the incident records are
+also redacted. This changes historical commit IDs: use the rewritten history,
+and do not merge old clones or branches back into it.
+
 ## Create an instance
 
 ```bash
@@ -108,15 +139,18 @@ If a critical runtime fix is unavailable, contain the instance rather than
 depending on incomplete PHP configuration workarounds:
 
 ```bash
+INSTANCE=example # Set this to your instance name.
+RG="rg-shaarli-$INSTANCE"
+APP=$(az group show --name "$RG" --query tags.shaarliAppName -o tsv)
 az containerapp ingress disable \
-  --name REDACTED_APP \
-  --resource-group REDACTED_RESOURCE_GROUP
+  --name "$APP" \
+  --resource-group "$RG"
 ```
 
 ## Naming, cost, and maintenance
 
-An instance named `personal` is managed as resource group
-`REDACTED_RESOURCE_GROUP`; the public app hostname contains a random 88-bit suffix.
+An instance named `example` is managed as resource group
+`rg-shaarli-example`; the public app hostname contains a random 88-bit suffix.
 Instance names must be 1-30 lowercase letters, numbers, or hyphens.
 
 The Consumption plan's scale-to-zero behavior and smallest supported resource
@@ -129,4 +163,4 @@ the app registration credential and update the Container App's Microsoft
 identity provider secret. Running create or clone again is intentionally not
 an in-place upgrade operation.
 
-Work item: <REDACTED_PRIVATE_WORK_ITEM>
+Work item: REDACTED (private tracking reference).

@@ -79,19 +79,22 @@ The currently verified multi-platform v0.16.10 image index is:
 ghcr.io/shaarli/shaarli:v0.16.10@sha256:48a1a8962c58c74c5c36d4927a7c2dcb5bf191a93b83dc480d9827f383ada903
 ```
 
-Authenticate to the correct Azure tenant and select the known subscription:
+Identifiers in this published record are redacted. Fill in the optional Azure
+values in your ignored `.env.local` (see `.env.example`) and source it before
+following this runbook. Authenticate to your tenant and select your subscription:
 
 ```bash
-az login --tenant REDACTED_ID
-az account set --subscription REDACTED_ID
+source .env.local
+az login --tenant "${AZURE_TENANT_ID:?Set AZURE_TENANT_ID in .env.local}"
+az account set --subscription "${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env.local}"
 az account show --query '{name:name,id:id,tenantId:tenantId}' -o json
 ```
 
 Capture the pre-change state:
 
 ```bash
-RG=REDACTED_RESOURCE_GROUP
-APP=REDACTED_APP
+RG="rg-shaarli-${SHAARLI_INSTANCE:?Set SHAARLI_INSTANCE in .env.local}"
+APP=$(az group show --name "$RG" --query tags.shaarliAppName -o tsv)
 
 az containerapp show \
   --resource-group "$RG" \
@@ -133,8 +136,9 @@ az containerapp revision list \
   --query '[].{name:name,active:properties.active,healthy:properties.healthState,running:properties.runningState,created:properties.createdTime,image:properties.template.containers[0].image}' \
   -o table
 
-curl -sS -D - -o /dev/null --max-time 30 \
-  'https://REDACTED_HOST.azurecontainerapps.io/' |
+FQDN=$(az containerapp show --resource-group "$RG" --name "$APP" \
+  --query properties.configuration.ingress.fqdn -o tsv)
+curl -sS -D - -o /dev/null --max-time 30 "https://$FQDN/" |
   sed -n '1,20p'
 ```
 
