@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 # These constants are consumed by scripts that source this library.
 # shellcheck disable=SC2034
-readonly SHAARLI_DEFAULT_IMAGE="ghcr.io/shaarli/shaarli:release"
+readonly SHAARLI_DEFAULT_IMAGE="ghcr.io/shaarli/shaarli:v0.16.10@sha256:48a1a8962c58c74c5c36d4927a7c2dcb5bf191a93b83dc480d9827f383ada903"
 # shellcheck disable=SC2034
 readonly SHAARLI_DEFAULT_LOCATION="eastus"
 readonly SHAARLI_DATA_SHARE="shaarli-data"
@@ -55,6 +55,12 @@ validate_location() {
 validate_image() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]+$ ]] ||
     die "invalid container image reference: $1"
+}
+
+validate_pinned_image() {
+  validate_image "$1"
+  [[ "$1" =~ @sha256:[0-9a-f]{64}$ ]] ||
+    die "container image must be pinned by SHA-256 digest (expected IMAGE@sha256:<64 lowercase hex characters>)"
 }
 
 resource_group_for() {
@@ -194,7 +200,7 @@ provision_instance_base() {
 
   validate_instance_name "$instance_name"
   validate_location "$location"
-  validate_image "$image"
+  validate_pinned_image "$image"
   RESOURCE_GROUP="$(resource_group_for "$instance_name")"
   [[ "$(az group exists --name "$RESOURCE_GROUP")" == "false" ]] ||
     die "Shaarli instance '$instance_name' already exists ($RESOURCE_GROUP already exists)"

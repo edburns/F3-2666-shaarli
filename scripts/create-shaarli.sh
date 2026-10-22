@@ -14,7 +14,8 @@ Create a new private Shaarli instance on Azure Container Apps.
 
 Options:
   --location       Azure region (default: eastus)
-  --image          Shaarli container image (default: ghcr.io/shaarli/shaarli:release)
+  --image          Immutable Shaarli IMAGE@sha256:DIGEST reference
+                   (default: pinned Shaarli v0.16.10 with PHP 8.4.27)
   --principal-id   Only this Entra user object ID may access the app
                    (default: the signed-in Azure CLI user)
 EOF
